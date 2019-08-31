@@ -284,6 +284,10 @@ bool system::tracker_is_paused() const {
     return tracker_->is_paused();
 }
 
+bool system::tracker_is_tracking() const {
+    return tracker_->tracking_state_ == tracker_state_t::Tracking;
+}
+
 void system::resume_tracker() {
     tracker_->resume();
 }

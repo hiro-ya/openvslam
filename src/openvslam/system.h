@@ -168,6 +168,11 @@ public:
     bool tracker_is_paused() const;
 
     /**
+     * The tracking state is tracking or not
+     */
+    bool tracker_is_tracking() const;
+
+    /**
      * Resume the tracking module
      */
     void resume_tracker();
