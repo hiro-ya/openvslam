@@ -128,7 +128,9 @@ endif()
 
 find_package(catkin REQUIRED COMPONENTS
         cv_bridge
-        image_transport)
+        image_transport
+        tf_conversions
+)
 
 # thread library
 find_package(Threads REQUIRED)

@@ -10,8 +10,14 @@
 #include <iostream>
 #include <chrono>
 #include <numeric>
+#include <math.h>
+
+#include <Eigen/Core>
 
 #include <ros/ros.h>
+#include <tf_conversions/tf_eigen.h>
+#include <tf/transform_broadcaster.h>
+
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
 
@@ -68,7 +74,36 @@ void mono_localization(const std::shared_ptr<openvslam::config>& cfg, const std:
         const auto timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(tp_1 - tp_0).count();
 
         // input the current frame and estimate the camera pose
-        SLAM.track_for_monocular(cv_bridge::toCvShare(msg, "bgr8")->image, timestamp, mask);
+        Eigen::Matrix4d cam_pose = SLAM.track_for_monocular(cv_bridge::toCvShare(msg, "bgr8")->image, timestamp, mask);
+
+        if(SLAM.tracker_is_tracking()) {
+            //ovslam_to_world_m4d += cam_pose;
+
+            // convert eigen matrix to ros tf
+            Eigen::Affine3d cam_pose_affine;
+            cam_pose_affine = cam_pose;
+            tf::Transform cam_pose_tf;
+            tf::transformEigenToTF(cam_pose_affine, cam_pose_tf);
+
+            /*
+            double roll, pitch, yaw;
+            tf::Matrix3x3(cam_pose_tf.getRotation()).getRPY(roll, pitch, yaw);
+            
+            // transform and broadcast tf
+            tf::Quaternion q;
+            q = tf::createQuaternionFromRPY(roll, pitch, yaw);
+            */
+
+            // transform and broadcast tf
+            tf::Transform tf_ovslam_to_world;
+            tf_ovslam_to_world.setIdentity();
+            tf_ovslam_to_world.setRotation(cam_pose_tf.getRotation()*tf::createQuaternionFromRPY(0.5*M_PI, 0, 0));
+            tf_ovslam_to_world.setOrigin(10*cam_pose_tf.getOrigin());
+
+            static tf::TransformBroadcaster tfb;
+            tfb.sendTransform(tf::StampedTransform(tf_ovslam_to_world.inverse(), ros::Time::now(), "world", "ovslam_cam"));
+            // std::cout << "cam_pose: " << cam_pose_tf.getBasis() << std::endl;
+        }
 
         const auto tp_2 = std::chrono::steady_clock::now();
 
