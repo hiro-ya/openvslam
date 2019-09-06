@@ -15,8 +15,8 @@
 #include <Eigen/Core>
 
 #include <ros/ros.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <tf_conversions/tf_eigen.h>
-#include <tf/transform_broadcaster.h>
 
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
@@ -33,6 +33,8 @@
 #include <gperftools/profiler.h>
 #endif
 
+static ros::Publisher openvslam_pose_publisher;
+static geometry_msgs::PoseStamped openvslam_pose_msg;
 
 void mono_localization(const std::shared_ptr<openvslam::config>& cfg, const std::string& vocab_file_path,
                    const std::string& mask_img_path, const std::string& map_db_path, const bool mapping) {
@@ -55,21 +57,19 @@ void mono_localization(const std::shared_ptr<openvslam::config>& cfg, const std:
 
     // create a viewer object
     // and pass the frame_publisher and the map_publisher
-#ifdef USE_PANGOLIN_VIEWER
-    pangolin_viewer::viewer viewer(cfg, &SLAM, SLAM.get_frame_publisher(), SLAM.get_map_publisher());
-#elif USE_SOCKET_PUBLISHER
-    socket_publisher::publisher publisher(cfg, &SLAM, SLAM.get_frame_publisher(), SLAM.get_map_publisher());
-#endif
-
     std::vector<double> track_times;
     const auto tp_0 = std::chrono::steady_clock::now();
 
     // initialize this node
-    const ros::NodeHandle nh;
+    ros::NodeHandle nh;
     image_transport::ImageTransport it(nh);
+
+    // initialize publisher
+    openvslam_pose_publisher = nh.advertise<geometry_msgs::PoseStamped>("/openvslam_pose", 10);
 
     // run the SLAM as subscriber
     image_transport::Subscriber sub = it.subscribe("camera/image_raw", 1, [&](const sensor_msgs::ImageConstPtr& msg) {
+        const ros::Time rostime = ros::Time::now();
         const auto tp_1 = std::chrono::steady_clock::now();
         const auto timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(tp_1 - tp_0).count();
 
@@ -77,32 +77,30 @@ void mono_localization(const std::shared_ptr<openvslam::config>& cfg, const std:
         Eigen::Matrix4d cam_pose = SLAM.track_for_monocular(cv_bridge::toCvShare(msg, "bgr8")->image, timestamp, mask);
 
         if(SLAM.tracker_is_tracking()) {
-            //ovslam_to_world_m4d += cam_pose;
-
             // convert eigen matrix to ros tf
             Eigen::Affine3d cam_pose_affine;
             cam_pose_affine = cam_pose;
             tf::Transform cam_pose_tf;
             tf::transformEigenToTF(cam_pose_affine, cam_pose_tf);
 
-            /*
-            double roll, pitch, yaw;
-            tf::Matrix3x3(cam_pose_tf.getRotation()).getRPY(roll, pitch, yaw);
-            
-            // transform and broadcast tf
-            tf::Quaternion q;
-            q = tf::createQuaternionFromRPY(roll, pitch, yaw);
-            */
-
             // transform and broadcast tf
             tf::Transform tf_ovslam_to_world;
             tf_ovslam_to_world.setIdentity();
             tf_ovslam_to_world.setRotation(cam_pose_tf.getRotation()*tf::createQuaternionFromRPY(0.5*M_PI, 0, 0));
-            tf_ovslam_to_world.setOrigin(10*cam_pose_tf.getOrigin());
+            tf_ovslam_to_world.setOrigin(cam_pose_tf.getOrigin());
 
-            static tf::TransformBroadcaster tfb;
-            tfb.sendTransform(tf::StampedTransform(tf_ovslam_to_world.inverse(), ros::Time::now(), "world", "ovslam_cam"));
-            // std::cout << "cam_pose: " << cam_pose_tf.getBasis() << std::endl;
+            // openvslam_pose publisher
+            openvslam_pose_msg.header.frame_id = "/world";
+            openvslam_pose_msg.header.stamp = rostime;
+            openvslam_pose_msg.pose.position.x = tf_ovslam_to_world.inverse().getOrigin().getX();
+            openvslam_pose_msg.pose.position.y = tf_ovslam_to_world.inverse().getOrigin().getY();
+            openvslam_pose_msg.pose.position.z = tf_ovslam_to_world.inverse().getOrigin().getZ();
+            openvslam_pose_msg.pose.orientation.x = tf_ovslam_to_world.inverse().getRotation().x();
+            openvslam_pose_msg.pose.orientation.y = tf_ovslam_to_world.inverse().getRotation().y();
+            openvslam_pose_msg.pose.orientation.z = tf_ovslam_to_world.inverse().getRotation().z();
+            openvslam_pose_msg.pose.orientation.w = tf_ovslam_to_world.inverse().getRotation().w();
+
+            openvslam_pose_publisher.publish(openvslam_pose_msg);
         }
 
         const auto tp_2 = std::chrono::steady_clock::now();
@@ -111,41 +109,7 @@ void mono_localization(const std::shared_ptr<openvslam::config>& cfg, const std:
         track_times.push_back(track_time);
     });
 
-    // run the viewer in another thread
-#ifdef USE_PANGOLIN_VIEWER
-    std::thread thread([&]() {
-        viewer.run();
-        if (SLAM.terminate_is_requested()) {
-            // wait until the loop BA is finished
-            while (SLAM.loop_BA_is_running()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(5000));
-            }
-            ros::shutdown();
-        }
-    });
-#elif USE_SOCKET_PUBLISHER
-    std::thread thread([&]() {
-        publisher.run();
-        if (SLAM.terminate_is_requested()) {
-            // wait until the loop BA is finished
-            while (SLAM.loop_BA_is_running()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(5000));
-            }
-            ros::shutdown();
-        }
-    });
-#endif
-
     ros::spin();
-
-    // automatically close the viewer
-#ifdef USE_PANGOLIN_VIEWER
-    viewer.request_terminate();
-    thread.join();
-#elif USE_SOCKET_PUBLISHER
-    publisher.request_terminate();
-    thread.join();
-#endif
 
     // shutdown the SLAM process
     SLAM.shutdown();
