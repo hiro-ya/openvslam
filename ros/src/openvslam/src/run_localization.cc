@@ -69,7 +69,6 @@ void mono_localization(const std::shared_ptr<openvslam::config>& cfg, const std:
 
     // run the SLAM as subscriber
     image_transport::Subscriber sub = it.subscribe("camera/image_raw", 1, [&](const sensor_msgs::ImageConstPtr& msg) {
-        const ros::Time rostime = ros::Time::now();
         const auto tp_1 = std::chrono::steady_clock::now();
         const auto timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(tp_1 - tp_0).count();
 
@@ -91,7 +90,7 @@ void mono_localization(const std::shared_ptr<openvslam::config>& cfg, const std:
 
             // openvslam_pose publisher
             openvslam_pose_msg.header.frame_id = "/world";
-            openvslam_pose_msg.header.stamp = rostime;
+            openvslam_pose_msg.header.stamp = msg->header.stamp;
             openvslam_pose_msg.pose.position.x = tf_ovslam_to_world.inverse().getOrigin().getX();
             openvslam_pose_msg.pose.position.y = tf_ovslam_to_world.inverse().getOrigin().getY();
             openvslam_pose_msg.pose.position.z = tf_ovslam_to_world.inverse().getOrigin().getZ();
